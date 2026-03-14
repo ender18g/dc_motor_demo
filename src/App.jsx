@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 
-const VOLTAGES = [20, 40, 60, 80];
+const VOLTAGES = [20, 40, 60, 80, 100];
 const VOLTAGE_COLORS = {
   20: '#0077b6',
   40: '#2a9d8f',
   60: '#d64b2f',
-  80: '#ff9f1c'
+  80: '#ff9f1c',
+  100: '#6a994e'
 };
 const MAX_VOLTAGE = Math.max(...VOLTAGES);
 
@@ -42,6 +43,14 @@ function getOperatingPoint(voltage, tireRadiusM) {
   };
 }
 
+function getVehicleSpeedMps(rpm, tireRadiusM) {
+  return ((rpm / GEAR_RATIO) * 2 * Math.PI * tireRadiusM) / 60;
+}
+
+function getAngularSpeedRadPerSec(rpm) {
+  return (rpm * 2 * Math.PI) / 60;
+}
+
 function seedTracePoints() {
   return Object.fromEntries(VOLTAGES.map((voltage) => [voltage, []]));
 }
@@ -51,23 +60,48 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
   const height = 430;
   const margin = { top: 64, right: 34, bottom: 60, left: 74 };
 
-  const speedTickMax = Math.ceil((NO_LOAD_RPM_PER_VOLT * MAX_VOLTAGE) / 500) * 500;
+  const speedTickStep = 50;
+  const speedTickMax =
+    Math.ceil(getAngularSpeedRadPerSec(NO_LOAD_RPM_PER_VOLT * MAX_VOLTAGE) / speedTickStep) *
+    speedTickStep;
   const torqueTickMax = Math.ceil((STALL_TORQUE_PER_VOLT * MAX_VOLTAGE) / 0.5) * 0.5;
   const maxSpeed = speedTickMax * 1.06;
   const maxTorque = torqueTickMax * 1.06;
 
-  const x = (rpm) =>
-    margin.left + (rpm / maxSpeed) * (width - margin.left - margin.right);
+  const x = (angularSpeedRadPerSec) =>
+    margin.left + (angularSpeedRadPerSec / maxSpeed) * (width - margin.left - margin.right);
   const y = (torque) =>
     height - margin.bottom - (torque / maxTorque) * (height - margin.top - margin.bottom);
 
-  const xTicks = Array.from({ length: Math.round(speedTickMax / 500) + 1 }, (_, index) => index * 500);
+  const xTicks = Array.from(
+    { length: Math.round(speedTickMax / speedTickStep) + 1 },
+    (_, index) => index * speedTickStep
+  );
   const yTicks = Array.from({ length: Math.round(torqueTickMax / 0.5) + 1 }, (_, index) => index * 0.5);
   const legendHeight = 20 + VOLTAGES.length * 24;
+  const fastestPointIndexByVoltage = Object.fromEntries(
+    VOLTAGES.map((voltage) => {
+      let fastestIndex = -1;
+      let fastestSpeedMps = -Infinity;
+
+      traces[voltage].forEach((point, index) => {
+        if (point.vehicleSpeedMps > fastestSpeedMps) {
+          fastestSpeedMps = point.vehicleSpeedMps;
+          fastestIndex = index;
+        }
+      });
+
+      return [voltage, fastestIndex];
+    })
+  );
 
   return (
     <section className="chart-card">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Motor torque vs speed operating points">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Motor torque vs angular speed operating points"
+      >
         <defs>
           <linearGradient id="chartBackground" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="#f8fcff" />
@@ -91,7 +125,7 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
               className="chart-grid"
             />
             <text x={x(tick)} y={height - margin.bottom + 24} textAnchor="middle" className="tick-label">
-              {tick}
+              {tick.toFixed(0)}
             </text>
           </g>
         ))}
@@ -132,7 +166,7 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
           textAnchor="middle"
           className="axis-label"
         >
-          Motor Speed (RPM)
+          Motor Speed (rad/s)
         </text>
 
         <text
@@ -142,7 +176,7 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
           textAnchor="middle"
           className="axis-label"
         >
-          Motor Torque (N·m)
+          Motor Load Torque (N·m)
         </text>
 
         {VOLTAGES.map((voltage) => {
@@ -150,22 +184,27 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
 
           return (
             <g key={`points-${voltage}`}>
-              {traces[voltage].map((point, index) => (
-                <circle
-                  key={`${voltage}-${point.tireRadiusM}-${index}`}
-                  cx={x(point.rpm)}
-                  cy={y(point.motorTorque)}
-                  r={selectedVoltage === voltage ? 5 : 4}
-                  fill={color}
-                  opacity={0.75}
-                />
-              ))}
+              {traces[voltage].map((point, index) => {
+                const baseRadius = selectedVoltage === voltage ? 5 : 4;
+                const isFastestPoint = index === fastestPointIndexByVoltage[voltage];
+
+                return (
+                  <circle
+                    key={`${voltage}-${point.tireRadiusM}-${index}`}
+                    cx={x(getAngularSpeedRadPerSec(point.rpm))}
+                    cy={y(point.motorTorque)}
+                    r={isFastestPoint ? baseRadius * 2 : baseRadius}
+                    fill={color}
+                    opacity={0.75}
+                  />
+                );
+              })}
             </g>
           );
         })}
 
         <circle
-          cx={x(operatingPoint.rpm)}
+          cx={x(getAngularSpeedRadPerSec(operatingPoint.rpm))}
           cy={y(operatingPoint.motorTorque)}
           r="8"
           fill={VOLTAGE_COLORS[selectedVoltage]}
@@ -191,10 +230,11 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
 
 function TruckScene({ tireRadiusM, operatingPoint }) {
   const wheelSpinDuration = `${Math.max(0.3, (60 * GEAR_RATIO) / Math.max(operatingPoint.rpm, 1)).toFixed(2)}s`;
-  const vehicleSpeedMps =
-    ((operatingPoint.rpm / GEAR_RATIO) * 2 * Math.PI * tireRadiusM) / 60;
+  const vehicleSpeedMps = getVehicleSpeedMps(operatingPoint.rpm, tireRadiusM);
   const visualSpeedMps = operatingPoint.stalled ? 0 : Math.max(vehicleSpeedMps, 0.2);
   const terrainScrollDuration = `${Math.max(1.8, 18 / Math.max(visualSpeedMps, 0.2)).toFixed(2)}s`;
+  const roadDashDuration = `${Math.max(0.9, 8 / Math.max(visualSpeedMps, 0.2)).toFixed(2)}s`;
+  const flagWaveDuration = `${Math.max(0.45, 2.4 / Math.max(visualSpeedMps, 0.2)).toFixed(2)}s`;
 
   const normalizedRadius =
     (tireRadiusM - MIN_TIRE_RADIUS_M) / (MAX_TIRE_RADIUS_M - MIN_TIRE_RADIUS_M);
@@ -220,11 +260,24 @@ function TruckScene({ tireRadiusM, operatingPoint }) {
         />
 
         <div className="road-system">
-          <div className="road-surface" />
+          <div
+            className={`road-surface ${operatingPoint.stalled ? 'paused' : ''}`}
+            style={{ '--road-dash-duration': roadDashDuration }}
+          />
         </div>
 
         <div className="truck-shell">
           <div className="truck-body" style={{ bottom: `${bodyBottomPx}px` }}>
+            <div className="tailgate-flag" aria-hidden="true">
+              <span className="flag-pole" />
+              <div
+                className={`flag-cloth ${operatingPoint.stalled ? 'paused' : ''}`}
+                style={{ '--flag-wave-duration': flagWaveDuration }}
+              >
+                <span className="flag-mark-n">N</span>
+                <span className="flag-mark-star">★</span>
+              </div>
+            </div>
             <div className="pickup-body-main" />
             <div className="pickup-cab-shell" />
             <div className="pickup-hood" />
@@ -278,12 +331,29 @@ function App() {
     () => getOperatingPoint(voltage, tireRadiusM),
     [voltage, tireRadiusM]
   );
+  const fastestSpeedByVoltage = useMemo(
+    () =>
+      Object.fromEntries(
+        VOLTAGES.map((value) => {
+          const fastestPoint = traces[value].reduce((fastest, point) => {
+            if (!fastest || point.vehicleSpeedMps > fastest.vehicleSpeedMps) {
+              return point;
+            }
+            return fastest;
+          }, null);
+
+          return [value, fastestPoint];
+        })
+      ),
+    [traces]
+  );
 
   useEffect(() => {
     const nextPoint = {
       tireRadiusM: Number(tireRadiusM.toFixed(4)),
       motorTorque: Number(operatingPoint.motorTorque.toFixed(4)),
       rpm: Number(operatingPoint.rpm.toFixed(2)),
+      vehicleSpeedMps: Number(getVehicleSpeedMps(operatingPoint.rpm, tireRadiusM).toFixed(4)),
       stalled: operatingPoint.stalled
     };
 
@@ -315,6 +385,7 @@ function App() {
         tireRadiusM: Number(tireRadiusM.toFixed(4)),
         motorTorque: Number(point.motorTorque.toFixed(4)),
         rpm: Number(point.rpm.toFixed(2)),
+        vehicleSpeedMps: Number(getVehicleSpeedMps(point.rpm, tireRadiusM).toFixed(4)),
         stalled: point.stalled
       }
     ];
@@ -322,7 +393,8 @@ function App() {
     setTraces(resetTraces);
   };
 
-  const vehicleSpeedMps = ((operatingPoint.rpm / GEAR_RATIO) * 2 * Math.PI * tireRadiusM) / 60;
+  const vehicleSpeedMps = getVehicleSpeedMps(operatingPoint.rpm, tireRadiusM);
+  const motorAngularSpeedRadPerSec = getAngularSpeedRadPerSec(operatingPoint.rpm);
 
   return (
     <div className="app-shell">
@@ -357,24 +429,20 @@ function App() {
             onChange={(event) => setTireRadiusM(Number(event.target.value))}
           />
 
-          <label htmlFor="voltage-slider" className="slider-label">
+          <label className="slider-label">
             Applied voltage: <strong>{voltage} V</strong>
           </label>
-          <input
-            id="voltage-slider"
-            type="range"
-            min={VOLTAGES[0]}
-            max={VOLTAGES[VOLTAGES.length - 1]}
-            step="20"
-            value={voltage}
-            onChange={(event) => setVoltage(Number(event.target.value))}
-          />
-
-          <div className="voltage-options">
+          <div className="voltage-options" role="group" aria-label="Applied voltage options">
             {VOLTAGES.map((value) => (
-              <span key={value} className={value === voltage ? 'active-voltage' : ''}>
+              <button
+                key={value}
+                type="button"
+                className={`voltage-button ${value === voltage ? 'active-voltage' : ''}`}
+                onClick={() => setVoltage(value)}
+                aria-pressed={value === voltage}
+              >
                 {value} V
-              </span>
+              </button>
             ))}
           </div>
 
@@ -386,7 +454,7 @@ function App() {
               Motor torque: <strong>{operatingPoint.motorTorque.toFixed(3)} N·m</strong>
             </p>
             <p>
-              Motor speed: <strong>{operatingPoint.rpm.toFixed(0)} RPM</strong>
+              Motor speed: <strong>{motorAngularSpeedRadPerSec.toFixed(2)} rad/s</strong>
             </p>
             <p>
               Vehicle speed: <strong>{vehicleSpeedMps.toFixed(2)} m/s</strong>
@@ -397,6 +465,20 @@ function App() {
                 {operatingPoint.stalled ? 'Stalled (at stall torque)' : 'Running'}
               </strong>
             </p>
+          </div>
+
+          <div className="fastest-speed-grid">
+            <p className="fastest-speed-title">Fastest tracked speed by voltage</p>
+            {VOLTAGES.map((value) => (
+              <p key={`fastest-${value}`}>
+                {value} V:{' '}
+                <strong>
+                  {fastestSpeedByVoltage[value]
+                    ? `${fastestSpeedByVoltage[value].vehicleSpeedMps.toFixed(2)} m/s`
+                    : '--'}
+                </strong>
+              </p>
+            ))}
           </div>
 
           <button type="button" onClick={clearTracePoints} className="clear-button">
