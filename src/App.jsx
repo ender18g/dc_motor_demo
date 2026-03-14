@@ -1,68 +1,49 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 
-const VOLTAGES = [20, 40, 60];
+const VOLTAGES = [20, 40, 60, 80];
 const VOLTAGE_COLORS = {
   20: '#0077b6',
   40: '#2a9d8f',
-  60: '#d64b2f'
+  60: '#d64b2f',
+  80: '#ff9f1c'
 };
+const MAX_VOLTAGE = Math.max(...VOLTAGES);
 
 const NO_LOAD_RPM_PER_VOLT = 50;
 const STALL_TORQUE_PER_VOLT = 0.05;
-const MASS_KG = 20;
-const WHEEL_RADIUS_M = 0.1;
 const GEAR_RATIO = 12;
-const MAX_INCLINE_DEG = 35;
+const ROLLING_FORCE_N = 60;
+const MIN_TIRE_RADIUS_M = 0.01;
+const MAX_TIRE_RADIUS_M = 1;
+const TIRE_RADIUS_STEP_M = 0.01;
 
-function getLoadTorque(inclineDeg) {
-  const inclineRad = (inclineDeg * Math.PI) / 180;
-  const wheelTorque = MASS_KG * 9.81 * Math.sin(inclineRad) * WHEEL_RADIUS_M;
+function getLoadTorque(tireRadiusM) {
+  const wheelTorque = ROLLING_FORCE_N * tireRadiusM;
   return Math.max(0, wheelTorque / GEAR_RATIO);
 }
 
-function getOperatingPoint(voltage, inclineDeg) {
+function getOperatingPoint(voltage, tireRadiusM) {
   const noLoadRpm = NO_LOAD_RPM_PER_VOLT * voltage;
   const stallTorque = STALL_TORQUE_PER_VOLT * voltage;
-  const loadTorque = getLoadTorque(inclineDeg);
-  const torqueFraction = loadTorque / stallTorque;
-
-  if (torqueFraction >= 1) {
-    return {
-      voltage,
-      inclineDeg,
-      noLoadRpm,
-      stallTorque,
-      loadTorque,
-      rpm: 0,
-      stalled: true
-    };
-  }
+  const requiredTorque = getLoadTorque(tireRadiusM);
+  const stalled = requiredTorque >= stallTorque;
+  const motorTorque = stalled ? stallTorque : requiredTorque;
 
   return {
     voltage,
-    inclineDeg,
+    tireRadiusM,
     noLoadRpm,
     stallTorque,
-    loadTorque,
-    rpm: noLoadRpm * (1 - torqueFraction),
-    stalled: false
+    requiredTorque,
+    motorTorque,
+    rpm: stalled ? 0 : noLoadRpm * (1 - requiredTorque / stallTorque),
+    stalled
   };
 }
 
 function seedTracePoints() {
-  return Object.fromEntries(
-    VOLTAGES.map((voltage) => [
-      voltage,
-      [
-        {
-          inclineDeg: 0,
-          loadTorque: 0,
-          rpm: NO_LOAD_RPM_PER_VOLT * voltage
-        }
-      ]
-    ])
-  );
+  return Object.fromEntries(VOLTAGES.map((voltage) => [voltage, []]));
 }
 
 function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
@@ -70,20 +51,23 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
   const height = 430;
   const margin = { top: 64, right: 34, bottom: 60, left: 74 };
 
-  const maxTorque = STALL_TORQUE_PER_VOLT * 60 * 1.06;
-  const maxSpeed = NO_LOAD_RPM_PER_VOLT * 60 * 1.06;
+  const speedTickMax = Math.ceil((NO_LOAD_RPM_PER_VOLT * MAX_VOLTAGE) / 500) * 500;
+  const torqueTickMax = Math.ceil((STALL_TORQUE_PER_VOLT * MAX_VOLTAGE) / 0.5) * 0.5;
+  const maxSpeed = speedTickMax * 1.06;
+  const maxTorque = torqueTickMax * 1.06;
 
-  const x = (torque) =>
-    margin.left + (torque / maxTorque) * (width - margin.left - margin.right);
-  const y = (rpm) =>
-    height - margin.bottom - (rpm / maxSpeed) * (height - margin.top - margin.bottom);
+  const x = (rpm) =>
+    margin.left + (rpm / maxSpeed) * (width - margin.left - margin.right);
+  const y = (torque) =>
+    height - margin.bottom - (torque / maxTorque) * (height - margin.top - margin.bottom);
 
-  const xTicks = [0, 0.5, 1, 1.5, 2, 2.5, 3];
-  const yTicks = [0, 500, 1000, 1500, 2000, 2500, 3000];
+  const xTicks = Array.from({ length: Math.round(speedTickMax / 500) + 1 }, (_, index) => index * 500);
+  const yTicks = Array.from({ length: Math.round(torqueTickMax / 0.5) + 1 }, (_, index) => index * 0.5);
+  const legendHeight = 20 + VOLTAGES.length * 24;
 
   return (
     <section className="chart-card">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Speed torque curve plot">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Motor torque vs speed operating points">
         <defs>
           <linearGradient id="chartBackground" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="#f8fcff" />
@@ -94,7 +78,7 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
         <rect x="0" y="0" width={width} height={height} fill="url(#chartBackground)" rx="18" />
 
         <text x={width / 2} y={34} textAnchor="middle" className="chart-title">
-          DC Motor Speed-Torque Curves
+          DC Motor Operating Points (Torque vs Speed)
         </text>
 
         {xTicks.map((tick) => (
@@ -107,7 +91,7 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
               className="chart-grid"
             />
             <text x={x(tick)} y={height - margin.bottom + 24} textAnchor="middle" className="tick-label">
-              {tick.toFixed(1)}
+              {tick}
             </text>
           </g>
         ))}
@@ -122,7 +106,7 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
               className="chart-grid"
             />
             <text x={margin.left - 12} y={y(tick) + 4} textAnchor="end" className="tick-label">
-              {tick}
+              {tick.toFixed(1)}
             </text>
           </g>
         ))}
@@ -148,7 +132,7 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
           textAnchor="middle"
           className="axis-label"
         >
-          Motor Torque (N·m)
+          Motor Speed (RPM)
         </text>
 
         <text
@@ -158,32 +142,19 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
           textAnchor="middle"
           className="axis-label"
         >
-          Motor Speed (RPM)
+          Motor Torque (N·m)
         </text>
 
         {VOLTAGES.map((voltage) => {
-          const stallTorque = STALL_TORQUE_PER_VOLT * voltage;
-          const noLoadRpm = NO_LOAD_RPM_PER_VOLT * voltage;
           const color = VOLTAGE_COLORS[voltage];
 
           return (
-            <g key={`curve-${voltage}`}>
-              <line
-                x1={x(0)}
-                y1={y(noLoadRpm)}
-                x2={x(stallTorque)}
-                y2={y(0)}
-                stroke={color}
-                strokeWidth={selectedVoltage === voltage ? 4.6 : 3.2}
-                strokeLinecap="round"
-                opacity={selectedVoltage === voltage ? 0.98 : 0.8}
-              />
-
+            <g key={`points-${voltage}`}>
               {traces[voltage].map((point, index) => (
                 <circle
-                  key={`${voltage}-${point.inclineDeg}-${index}`}
-                  cx={x(point.loadTorque)}
-                  cy={y(point.rpm)}
+                  key={`${voltage}-${point.tireRadiusM}-${index}`}
+                  cx={x(point.rpm)}
+                  cy={y(point.motorTorque)}
                   r={selectedVoltage === voltage ? 5 : 4}
                   fill={color}
                   opacity={0.75}
@@ -194,8 +165,8 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
         })}
 
         <circle
-          cx={x(operatingPoint.loadTorque)}
-          cy={y(operatingPoint.rpm)}
+          cx={x(operatingPoint.rpm)}
+          cy={y(operatingPoint.motorTorque)}
           r="8"
           fill={VOLTAGE_COLORS[selectedVoltage]}
           stroke="#ffffff"
@@ -203,12 +174,12 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
         />
 
         <g transform={`translate(${width - 210}, ${margin.top + 10})`}>
-          <rect width="176" height="94" rx="10" className="legend-bg" />
+          <rect width="176" height={legendHeight} rx="10" className="legend-bg" />
           {VOLTAGES.map((voltage, index) => (
             <g key={`legend-${voltage}`} transform={`translate(12, ${20 + index * 24})`}>
-              <line x1="0" y1="0" x2="24" y2="0" stroke={VOLTAGE_COLORS[voltage]} strokeWidth="4" />
+              <circle cx="12" cy="-1" r="6" fill={VOLTAGE_COLORS[voltage]} />
               <text x="32" y="4" className="legend-label">
-                {voltage} V curve
+                {voltage} V points
               </text>
             </g>
           ))}
@@ -218,46 +189,81 @@ function MotorCurveChart({ traces, operatingPoint, selectedVoltage }) {
   );
 }
 
-function InclineScene({ inclineDeg, operatingPoint }) {
+function TruckScene({ tireRadiusM, operatingPoint }) {
   const wheelSpinDuration = `${Math.max(0.3, (60 * GEAR_RATIO) / Math.max(operatingPoint.rpm, 1)).toFixed(2)}s`;
-
   const vehicleSpeedMps =
-    ((operatingPoint.rpm / GEAR_RATIO) * 2 * Math.PI * WHEEL_RADIUS_M) / 60;
+    ((operatingPoint.rpm / GEAR_RATIO) * 2 * Math.PI * tireRadiusM) / 60;
+  const visualSpeedMps = operatingPoint.stalled ? 0 : Math.max(vehicleSpeedMps, 0.2);
+  const terrainScrollDuration = `${Math.max(1.8, 18 / Math.max(visualSpeedMps, 0.2)).toFixed(2)}s`;
 
-  const treeScrollDuration = `${Math.max(1.8, 14 / Math.max(vehicleSpeedMps, 0.25)).toFixed(2)}s`;
+  const normalizedRadius =
+    (tireRadiusM - MIN_TIRE_RADIUS_M) / (MAX_TIRE_RADIUS_M - MIN_TIRE_RADIUS_M);
+  const tireRadiusPx = 2 + normalizedRadius * 52;
+  const tireDiameterPx = tireRadiusPx * 2;
+  const bodyBottomPx = Math.max(0, tireDiameterPx - 16);
+  const isTinyWheel = tireDiameterPx < 12;
 
   return (
     <section className="scene-card">
-      <h2>Incline Drive Visualization</h2>
+      <h2>Truck Visualization</h2>
       <div className="scene-window">
-        <div
-          className={`tree-lane ${operatingPoint.rpm < 5 ? 'paused' : ''}`}
-          style={{ animationDuration: treeScrollDuration }}
-        />
-
         <div className="sun-disc" />
 
-        <div className="road-system" style={{ transform: `translateY(28px) rotate(${-inclineDeg}deg)` }}>
+        <div className="hill-layer">
+          <div className="hill hill-back" />
+          <div className="hill hill-front" />
+        </div>
+
+        <div
+          className={`terrain-scroll ${operatingPoint.stalled ? 'paused' : ''}`}
+          style={{ animationDuration: terrainScrollDuration }}
+        />
+
+        <div className="road-system">
           <div className="road-surface" />
-          <div className="car-shell">
-            <div className="car-top" />
-            <div className="car-base" />
-            <div
-              className={`wheel ${operatingPoint.stalled ? 'stalled' : ''}`}
-              style={{ animationDuration: wheelSpinDuration }}
-            >
-              <span className="spoke" />
-            </div>
-            <div
-              className={`wheel ${operatingPoint.stalled ? 'stalled' : ''}`}
-              style={{ animationDuration: wheelSpinDuration }}
-            >
-              <span className="spoke" />
-            </div>
+        </div>
+
+        <div className="truck-shell">
+          <div className="truck-body" style={{ bottom: `${bodyBottomPx}px` }}>
+            <div className="pickup-body-main" />
+            <div className="pickup-cab-shell" />
+            <div className="pickup-hood" />
+            <div className="pickup-window-main" />
+            <div className="pickup-window-rear" />
+            <div className="pickup-fender fender-left" />
+            <div className="pickup-fender fender-right" />
+            <div className="pickup-front-bumper" />
+            <div className="pickup-headlight" />
+          </div>
+
+          <div
+            className={`truck-wheel wheel-left ${operatingPoint.stalled ? 'stalled' : ''} ${
+              isTinyWheel ? 'dot-wheel' : ''
+            }`}
+            style={{
+              width: `${tireDiameterPx}px`,
+              height: `${tireDiameterPx}px`,
+              animationDuration: wheelSpinDuration
+            }}
+          >
+            <span className="wheel-spin-bar" />
+          </div>
+
+          <div
+            className={`truck-wheel wheel-right ${operatingPoint.stalled ? 'stalled' : ''} ${
+              isTinyWheel ? 'dot-wheel' : ''
+            }`}
+            style={{
+              width: `${tireDiameterPx}px`,
+              height: `${tireDiameterPx}px`,
+              animationDuration: wheelSpinDuration
+            }}
+          >
+            <span className="wheel-spin-bar" />
           </div>
         </div>
 
-        <div className="incline-tag">Incline: {inclineDeg} deg</div>
+        <div className="incline-tag">Tire radius: {tireRadiusM.toFixed(2)} m</div>
       </div>
     </section>
   );
@@ -265,26 +271,32 @@ function InclineScene({ inclineDeg, operatingPoint }) {
 
 function App() {
   const [voltage, setVoltage] = useState(20);
-  const [inclineDeg, setInclineDeg] = useState(0);
+  const [tireRadiusM, setTireRadiusM] = useState(MIN_TIRE_RADIUS_M);
   const [traces, setTraces] = useState(() => seedTracePoints());
 
   const operatingPoint = useMemo(
-    () => getOperatingPoint(voltage, inclineDeg),
-    [voltage, inclineDeg]
+    () => getOperatingPoint(voltage, tireRadiusM),
+    [voltage, tireRadiusM]
   );
 
   useEffect(() => {
     const nextPoint = {
-      inclineDeg,
-      loadTorque: Number(operatingPoint.loadTorque.toFixed(4)),
-      rpm: Number(operatingPoint.rpm.toFixed(2))
+      tireRadiusM: Number(tireRadiusM.toFixed(4)),
+      motorTorque: Number(operatingPoint.motorTorque.toFixed(4)),
+      rpm: Number(operatingPoint.rpm.toFixed(2)),
+      stalled: operatingPoint.stalled
     };
 
     setTraces((currentTraces) => {
       const series = currentTraces[voltage];
-      const alreadyTracked = series.some((point) => point.inclineDeg === inclineDeg);
+      const alreadyTracked = series.some((point) => point.tireRadiusM === nextPoint.tireRadiusM);
 
       if (alreadyTracked) {
+        return currentTraces;
+      }
+
+      const hasStallPoint = series.some((point) => point.stalled);
+      if (nextPoint.stalled && hasStallPoint) {
         return currentTraces;
       }
 
@@ -293,13 +305,24 @@ function App() {
         [voltage]: [...series, nextPoint]
       };
     });
-  }, [inclineDeg, operatingPoint.loadTorque, operatingPoint.rpm, voltage]);
+  }, [tireRadiusM, operatingPoint.motorTorque, operatingPoint.rpm, operatingPoint.stalled, voltage]);
 
   const clearTracePoints = () => {
-    setTraces(seedTracePoints());
+    const resetTraces = seedTracePoints();
+    const point = getOperatingPoint(voltage, tireRadiusM);
+    resetTraces[voltage] = [
+      {
+        tireRadiusM: Number(tireRadiusM.toFixed(4)),
+        motorTorque: Number(point.motorTorque.toFixed(4)),
+        rpm: Number(point.rpm.toFixed(2)),
+        stalled: point.stalled
+      }
+    ];
+
+    setTraces(resetTraces);
   };
 
-  const speedMps = ((operatingPoint.rpm / GEAR_RATIO) * 2 * Math.PI * WHEEL_RADIUS_M) / 60;
+  const vehicleSpeedMps = ((operatingPoint.rpm / GEAR_RATIO) * 2 * Math.PI * tireRadiusM) / 60;
 
   return (
     <div className="app-shell">
@@ -308,8 +331,8 @@ function App() {
         <div>
           <h1>WRC DC Motor Demo</h1>
           <p>
-            Explore how incline load and voltage shift an ideal DC motor operating point on the
-            speed-torque curve.
+            Explore how tire radius load and voltage shift an ideal DC motor operating point on
+            the torque-speed plot.
           </p>
         </div>
       </header>
@@ -318,17 +341,17 @@ function App() {
         <section className="controls-card">
           <h2>Controls</h2>
 
-          <label htmlFor="incline-slider" className="slider-label">
-            Incline angle: <strong>{inclineDeg} deg</strong>
+          <label htmlFor="tire-radius-slider" className="slider-label">
+            Tire radius: <strong>{tireRadiusM.toFixed(2)} m</strong>
           </label>
           <input
-            id="incline-slider"
+            id="tire-radius-slider"
             type="range"
-            min="0"
-            max={MAX_INCLINE_DEG}
-            step="1"
-            value={inclineDeg}
-            onChange={(event) => setInclineDeg(Number(event.target.value))}
+            min={MIN_TIRE_RADIUS_M}
+            max={MAX_TIRE_RADIUS_M}
+            step={TIRE_RADIUS_STEP_M}
+            value={tireRadiusM}
+            onChange={(event) => setTireRadiusM(Number(event.target.value))}
           />
 
           <label htmlFor="voltage-slider" className="slider-label">
@@ -337,8 +360,8 @@ function App() {
           <input
             id="voltage-slider"
             type="range"
-            min="20"
-            max="60"
+            min={VOLTAGES[0]}
+            max={VOLTAGES[VOLTAGES.length - 1]}
             step="20"
             value={voltage}
             onChange={(event) => setVoltage(Number(event.target.value))}
@@ -354,18 +377,21 @@ function App() {
 
           <div className="readout-grid">
             <p>
-              Load torque: <strong>{operatingPoint.loadTorque.toFixed(3)} N·m</strong>
+              Required load torque: <strong>{operatingPoint.requiredTorque.toFixed(3)} N·m</strong>
+            </p>
+            <p>
+              Motor torque: <strong>{operatingPoint.motorTorque.toFixed(3)} N·m</strong>
             </p>
             <p>
               Motor speed: <strong>{operatingPoint.rpm.toFixed(0)} RPM</strong>
             </p>
             <p>
-              Vehicle speed: <strong>{speedMps.toFixed(2)} m/s</strong>
+              Vehicle speed: <strong>{vehicleSpeedMps.toFixed(2)} m/s</strong>
             </p>
             <p>
               Condition:{' '}
               <strong className={operatingPoint.stalled ? 'warn' : 'ok'}>
-                {operatingPoint.stalled ? 'Stalled (load >= stall torque)' : 'Running'}
+                {operatingPoint.stalled ? 'Stalled (at stall torque)' : 'Running'}
               </strong>
             </p>
           </div>
@@ -375,7 +401,7 @@ function App() {
           </button>
         </section>
 
-        <InclineScene inclineDeg={inclineDeg} operatingPoint={operatingPoint} />
+        <TruckScene tireRadiusM={tireRadiusM} operatingPoint={operatingPoint} />
         <MotorCurveChart
           traces={traces}
           operatingPoint={operatingPoint}
