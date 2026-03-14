@@ -270,8 +270,8 @@ function TruckScene({ tireRadiusM, operatingPoint }) {
 }
 
 function App() {
-  const [voltage, setVoltage] = useState(20);
-  const [tireRadiusM, setTireRadiusM] = useState(MIN_TIRE_RADIUS_M);
+  const [voltage, setVoltage] = useState(60);
+  const [tireRadiusM, setTireRadiusM] = useState(0.5);
   const [traces, setTraces] = useState(() => seedTracePoints());
 
   const operatingPoint = useMemo(
@@ -327,8 +327,11 @@ function App() {
   return (
     <div className="app-shell">
       <header className="hero-header">
-        <img className="site-logo" src="/WRC_logo.png" alt="WRC logo" />
-        <div>
+<img
+  className="site-logo"
+  src={`${import.meta.env.BASE_URL}WRC_logo.png`}
+  alt="WRC logo"
+/>        <div>
           <h1>WRC DC Motor Demo</h1>
           <p>
             Explore how tire radius load and voltage shift an ideal DC motor operating point on
